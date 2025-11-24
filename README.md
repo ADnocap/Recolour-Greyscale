@@ -147,29 +147,6 @@ pip install lmdb lpips
 
 ---
 
-## Project Structure
-
-```
-project/
-├── config/
-│   └── training configuration
-├── models/
-│   ├── encoder.py
-│   ├── decoder.py
-│   ├── discriminator.py
-│   └── ddcolor.py
-├── utils/
-│   ├── data_loader.py
-│   ├── losses.py
-│   └── color_utils.py
-├── checkpoints/
-│   └── saved models
-├── samples/
-│   └── training visualizations
-└── train.py
-```
-
----
 
 ## Usage
 
@@ -205,35 +182,6 @@ result = inference(
     checkpoint_path='checkpoints/latest.pth'
 )
 ```
-
----
-
-## Model Components
-
-### Color Decoder Block (CDB)
-
-Each Color Decoder Block processes information through three stages:
-
-1. **Cross-Attention Layer**
-
-   - Queries: Color embeddings (Q)
-   - Keys/Values: Visual features (K, V)
-   - Allows color queries to attend to relevant image regions
-
-2. **Self-Attention Layer**
-
-   - Color queries interact with each other
-   - Enables color consistency and semantic relationships
-
-3. **Feed-Forward Network**
-   - MLP with residual connections
-   - Processes and refines color representations
-
-### Discriminator
-
-- **PatchGAN discriminator** for adversarial training
-- Evaluates local image patches for realism
-- Helps generate sharp, realistic colorizations
 
 ---
 
