@@ -1,277 +1,187 @@
-# DDColor: Image Colorization Implementation
+# Automatic Image Colorization using CNNs
 
-A PyTorch implementation of **DDColor**, a state-of-the-art deep learning model for automatic image colorization using transformer-based dual decoders.
+A systematic exploration of CNN-based approaches for automatic grayscale image colorization, comparing different architectures, color spaces, and loss formulations.
 
-[![Paper](https://img.shields.io/badge/Paper-arXiv-red)](https://arxiv.org/pdf/2212.11613)
-[![GitHub](https://img.shields.io/badge/Original-Repository-blue)](https://github.com/piddnad/DDColor)
-
----
+**Authors:** Alexandre Dalban & Wacil Lakbir  
+**Institution:** CentraleSupélec
 
 ## Overview
 
-This project implements DDColor, a novel approach to image colorization that addresses the fundamental challenge of the ill-posed nature of the colorization problem. Given a grayscale image, DDColor predicts realistic and vibrant color information using a query-based transformer architecture with dual decoders.
+Image colorization—predicting plausible colors from grayscale images—is challenging for machine learning systems due to its ill-posed nature: a single grayscale intensity can correspond to many different valid colors. This project conducts a systematic investigation of CNN-based colorization approaches across three key dimensions:
 
-### Why DDColor?
+1. **Architecture**: Simple encoder-decoder CNN versus U-Net architectures with skip connections
+2. **Color Space**: RGB versus LAB (separating luminance from chrominance)
+3. **Problem Formulation**: Regression with continuous outputs versus classification over discretized color bins
 
-Traditional colorization methods often produce desaturated, unrealistic colors because they average multiple plausible color solutions. DDColor overcomes this by:
+## The Color Averaging Problem
 
-- Using **learnable color queries** that automatically discover diverse color patterns
-- Processing features at **multiple scales** to reduce color bleeding
-- Employing a **dual decoder architecture** for semantic-aware colorization
-- Introducing a **colorfulness loss** to encourage vibrant outputs
+A fundamental challenge arises when using standard regression losses like Mean Squared Error (MSE). Consider a grayscale pixel with intensity 128 that corresponds to three different colors in training: red (255,0,0), green (0,255,0), and blue (0,0,255). MSE loss optimizes for the conditional mean:
 
----
-
-## Key Features
-
-### 1. Query-Based Color Learning
-
-Instead of manually designing color priors, DDColor uses **100 learnable color queries** that automatically specialize in different color patterns through training.
-
-### 2. Multi-Scale Feature Processing
-
-By leveraging features at three different scales $(1/16, 1/8, 1/4)$, the model captures both fine details and global context, significantly reducing color bleeding across object boundaries.
-
-### 3. Dual Decoders
-
-- **Pixel Decoder**: Handles spatial structure and resolution restoration
-- **Color Decoder**: Provides semantic-aware color understanding via cross-attention and self-attention mechanisms
-
-### 4. Colorfulness Loss
-
-A novel loss function that encourages more vibrant, visually appealing results by measuring color statistics in the generated images.
-
----
-
-## Architecture
-
-The DDColor architecture consists of four main components:
-
-### 1. Encoder (Backbone)
-
-- **ConvNeXt-L** extracts semantic features from grayscale images
-- Produces multi-scale feature maps at $H/4×W/4, H/8×W/8, H/16×W/16,$ and $H/32×W/32$
-
-### 2. Pixel Decoder
-
-- Gradually upsamples features through 4 stages using PixelShuffle layers
-- Creates a multi-scale feature pyramid with skip connections from the encoder
-
-### 3. Color Decoder (Novel Component)
-
-- Query-based transformer with 100 learnable color embeddings
-- Consists of 3M color decoder blocks (where M=3)
-- Each block performs:
-  - **Cross-attention**: Color queries attend to image features
-  - **Self-attention**: Color queries interact with each other
-  - **MLP**: Feed-forward processing
-
-### 4. Fusion Module
-
-- Combines pixel decoder output (image embedding) and color decoder output (color embedding)
-- Generates final AB color channels in LAB space
-
----
-
-## Technical Details
-
-### Color Space
-
-DDColor operates in **LAB color space**:
-
-- **L channel**: Luminance (the input grayscale image)
-- **A channel**: Green ↔ Red color dimension
-- **B channel**: Blue ↔ Yellow color dimension
-
-### Input/Output
-
-- **Input**: Grayscale image $x_L ∈ R^{H×W×1}$
-- **Output**: Color channels $ŷ_{AB} ∈ R^{H×W×2}$
-- **Final Result**: Concatenate $[x_L, ŷ_{AB}]$ → LAB image $(H×W×3)$ → Convert to RGB
-
-### Loss Functions
-
-1. **Smooth L1 Loss**: For pixel-level color prediction
-2. **Perceptual Loss**: Using VGG features for semantic similarity
-3. **Adversarial Loss**: For realistic color generation
-4. **Colorfulness Loss**: Encourages vibrant, saturated colors
-
----
-
-## Understanding the Problem
-
-### The Ill-Posed Nature of Colorization
-
-Colorization is fundamentally **ill-posed** because:
-
-- Multiple color images can produce the same grayscale image
-- No unique solution exists without additional context
-- Example: A grayscale value of 128 could represent dark red, dark green, dark blue, or any combination
-
-### Multi-Modal Uncertainty
-
-Objects in images can have multiple plausible colors:
-
-- A car could be red, blue, black, white, or silver
-- A shirt could be any fabric color
-- A wall could be any paint color
-
-**The Challenge**: Naive neural networks tend to **average** all possible solutions, resulting in desaturated, unrealistic colors.
-
-**DDColor's Solution**: Uses semantic understanding via the color decoder and multi-scale features to make contextually appropriate, decisive color choices.
-
----
-
-## Installation
-
-### Prerequisites
-
-- Python 3.8+
-- CUDA-capable GPU (recommended)
-
-### Required Packages
-
-```bash
-# Core dependencies
-pip install torch torchvision torchaudio
-
-# Image processing and utilities
-pip install opencv-python pillow numpy pyyaml scipy scikit-image
-
-# Deep learning utilities
-pip install timm tensorboard
-
-# Additional dependencies
-pip install lmdb lpips
+```
+f*(128) = E[RGB | I_gray = 128] = (85, 85, 85)
 ```
 
----
+This produces a muddy brown color that averages the three pure hues, rather than committing to one plausible option. This "color averaging" problem produces the characteristic desaturated, brownish outputs of naive regression approaches.
 
+## Architectures
 
-## Usage
+### Baseline CNN Encoder-Decoder
 
-### Training
+A simple encoder-decoder design with 4.3M parameters:
 
-1. **Prepare your dataset**: Organize RGB images for training
+- **Encoder**: 4 downsampling blocks (Conv + BatchNorm + ReLU + MaxPool), 96×96 → 6×6, channels 1 → 512
+- **Decoder**: 4 upsampling blocks (ConvTranspose + BatchNorm + ReLU), 6×6 → 96×96, channels 512 → 3
 
-2. **Configure training parameters** in the notebook or configuration file:
+**Limitation**: Strong bottleneck compression leads to loss of fine spatial details, producing blurry and desaturated colors.
 
-   - Input size: 256×256 (default)
-   - Batch size: 4-8 (depending on GPU memory)
-   - Learning rate: 1e-4
-   - Number of epochs/iterations
+### U-Net Architecture
 
-3. **Run training**:
+U-Net adds skip connections between encoder and decoder layers at matching resolutions via channel-wise concatenation. This preserves fine-grained spatial information lost during downsampling, enabling sharper colorization boundaries.
 
-   ```python
-   # Execute the training loop
-   train()
-   ```
+**Two variants:**
 
-4. **Monitor progress**:
-   - Checkpoints saved periodically
-   - Sample colorizations generated during training
-   - TensorBoard logs for loss visualization
+- **U-Net RGB**: 4.5M parameters, 96×96 resolution, 4-level encoder-decoder
+- **U-Net LAB**: 20.5M parameters, 512×512 resolution, deeper architecture
 
-### Inference
+## Color Space Representations
 
-```python
-# Colorize a single image
-result = inference(
-    image_path='path/to/grayscale/image.jpg',
-    checkpoint_path='checkpoints/latest.pth'
-)
+### RGB Approach
+
+Model receives single-channel grayscale and predicts all three RGB channels. The network must jointly learn brightness and color information.
+
+### LAB Approach
+
+LAB color space separates luminance (L channel, 0-100) from chrominance (A and B channels, -128 to +127). We extract the L channel as input and train the model to predict only AB channels.
+
+**Pipeline:** RGB → LAB → extract L [0,1] as input → predict AB [-1,1] → recombine [L, predicted AB] → RGB
+
+This decoupling simplifies learning by removing brightness prediction, allowing the model to focus capacity on color.
+
+## Loss Functions
+
+### MSE vs L1
+
+- **MSE Loss**: Optimizes for conditional mean → color averaging
+- **L1 Loss**: Optimizes for conditional median → sharper colors but doesn't solve multi-modality
+
+### Combined Loss
+
+Weighted combination balances smoothness (MSE) with sharpness (L1):
+
+```
+L_total = α × MSE + (1-α) × L1,  where α ∈ {0.3, 0.5, 0.7}
 ```
 
----
+Balanced weighting (α = 0.5-0.7) provides good trade-offs between saturation and stability.
 
-## Training Details
+## Classification-Based Approach
 
-### Optimization
+To better handle multi-modal color distributions, we reformulate colorization as classification over discretized color bins.
 
-- **Generator**: AdamW optimizer with cosine annealing schedule
-- **Discriminator**: Adam optimizer with linear decay
-- **Warm-up**: Initial learning rate warm-up for stable training
+**Method:**
 
-### Data Augmentation
+- Partition AB space [-128, 127] into grid with bin size 10 → 26×26 = 676 bins
+- Same U-Net encoder-decoder, output modified to predict probability distribution over 676 bins (softmax)
+- Weighted cross-entropy loss to handle class imbalance
+- Inference: argmax over bins, map back to continuous AB values
 
-- Random horizontal flipping
-- Random cropping
-- Color jittering (applied to RGB before conversion to grayscale)
+This allows the network to represent multi-modal distributions and commit to specific colors without averaging.
 
-### Multi-GPU Training
+## Dataset
 
-- Supports DataParallel for multi-GPU setups
-- Automatic gradient accumulation for large batch sizes
+Custom dataset using Pexels API:
 
----
+- **Size**: 5,800 training / 1,000 test images
+- **Resolution**: 512×512 RGB
+- **Content**: People, places, natural scenes, objects
+- **Preprocessing**: Saturation filtering (threshold = 20/255) to exclude grayscale/washed-out images
+
+## Training Configuration
+
+| Model                | Params | Resolution | Batch Size | Epochs | Loss                   |
+| -------------------- | ------ | ---------- | ---------- | ------ | ---------------------- |
+| CNN Baseline         | 4.3M   | 96×96      | 512        | 20     | 0.7 MSE + 0.3 L1       |
+| U-Net RGB            | 4.5M   | 96×96      | 512        | 20     | 0.7 MSE + 0.3 L1       |
+| U-Net LAB            | 20.5M  | 512×512    | 16         | 15     | 0.5 MSE + 0.5 L1       |
+| U-Net Classification | 20.5M  | 512×512    | 16         | 20     | Weighted Cross-Entropy |
+
+All models use Adam optimizer with learning rate 1e-4.
 
 ## Results
 
-During training, the model generates periodic visualizations showing:
+### Quantitative Performance
 
-- Input grayscale image
-- Predicted colorization
-- Ground truth color image
+| Model                | Resolution | PSNR (dB) | Approach       |
+| -------------------- | ---------- | --------- | -------------- |
+| CNN Baseline         | 96×96      | 11.2      | Regression     |
+| U-Net RGB            | 96×96      | 13.5      | Regression     |
+| U-Net LAB            | 512×512    | 19.0      | Regression     |
+| U-Net Classification | 512×512    | 18.2      | Classification |
 
-Checkpoints are saved at regular intervals, allowing you to:
-
-- Resume training from any point
-- Evaluate different training stages
-- Select the best performing model
-
----
-
-## Key Concepts Explained
-
-### Why LAB Color Space?
-
-LAB separates luminance (L) from color information (A, B), making it ideal for colorization:
-
-- The L channel directly corresponds to the grayscale input
-- Only the A and B channels need to be predicted
-- Perceptually uniform color representation
-
-### Colorfulness Loss
-
-Measures the vibrancy of generated colors:
+**Peak Signal-to-Noise Ratio (PSNR)** measures reconstruction quality:
 
 ```
-Colorfulness = σ(AB) + 0.3 × |μ(AB)|
+PSNR = 10 × log₁₀(1.0 / MSE)
 ```
 
-Where σ is standard deviation and μ is mean of the AB channels. This encourages the model to generate saturated, vivid colors rather than gray or muted tones.
+Typical ranges: <20 dB = poor, 20-30 dB = acceptable, >30 dB = good.
 
----
+**Note**: PSNR correlates with MSE but doesn't always reflect perceptual quality. Two colorizations with identical PSNR may differ significantly in color saturation and semantic correctness.
 
-## Citation
+### Qualitative Analysis
 
-If you use this code or find it helpful, please cite the original DDColor paper:
+**CNN Baseline**: Heavily desaturated, brownish results with color bleeding. Fine details lost due to bottleneck.
 
-```bibtex
-@article{kang2022ddcolor,
-  title={DDColor: Towards Photo-Realistic Image Colorization via Dual Decoders},
-  author={Kang, Xiaoyang and Yang, Tao and Ouyang, Wenqi and Ren, Peiran and Li, Lingzhi and Xie, Xuansong},
-  journal={arXiv preprint arXiv:2212.11613},
-  year={2022}
-}
-```
+**U-Net RGB**: Clear improvement in saturation and spatial localization. Skip connections preserve edges and reduce bleeding. Some averaging persists in ambiguous regions.
 
----
+**U-Net LAB**: More vibrant colors and sharper boundaries at 512×512. LAB formulation helps focus on chrominance. Occasionally over-saturates.
 
-## References
+**U-Net Classification**: Most saturated and confident colors. Commits to specific choices rather than averaging. More natural and semantically plausible for objects with strong color priors (grass, sky, skin). However, visible quantization artifacts appear as discrete boundaries in smooth gradients.
 
-- **Paper**: [DDColor: Towards Photo-Realistic Image Colorization via Dual Decoders](https://arxiv.org/pdf/2212.11613)
-- **Original Implementation**: [GitHub Repository](https://github.com/piddnad/DDColor)
+## Key Findings
 
----
+**Architecture Impact:**
+
+- Skip connections in U-Net provide 2.3 dB improvement by preserving spatial information
+- Multi-scale feature preservation crucial for color boundary sharpness
+
+**Color Space Benefits:**
+
+- LAB formulation reduces complexity by separating luminance from chrominance
+- Enables model to focus on color prediction, producing more saturated outputs
+
+**Regression vs Classification:**
+
+- Classification avoids conditional mean convergence by representing full distributions
+- Produces more confident, saturated predictions
+- Trade-offs: quantization artifacts, class imbalance, higher memory
+
+**Loss Function Effects:**
+
+- MSE alone → smoothest but most desaturated
+- L1 → increased saturation but potential artifacts
+- Combined (α = 0.5-0.7) → balanced trade-off
+
+## Limitations
+
+1. **Color averaging persists**: Even with combined losses and LAB space, regression models produce desaturated averages in ambiguous regions
+
+2. **Quantization artifacts**: Classification model shows visible discrete boundaries in smooth gradients
+
+3. **Ambiguous objects**: All models struggle with objects lacking strong color priors (walls, synthetic objects, varied-color clothing)
+
+4. **Class imbalance**: Rare colors remain underrepresented despite weighted loss
+
+5. **Metric limitations**: PSNR doesn't fully capture perceptual quality or semantic correctness
+
+## Future Directions
+
+- Perceptual losses from pre-trained networks for semantic correctness
+- Interactive user guidance through sparse color hints
+- Soft binning schemes or learnable color centers
+- Probabilistic sampling from predicted distributions rather than argmax
+- Generative models (GANs, diffusion) for more realistic colorizations
 
 ## License
 
-This implementation is for educational and research purposes. Please refer to the original DDColor repository for licensing information.
-
----
-
-## Acknowledgments
-
-This implementation is based on the DDColor paper by Kang et al. Special thanks to the authors for their innovative work in the field of image colorization.
+Educational purposes. Dataset images sourced from Pexels under their license terms.
